@@ -25,7 +25,8 @@ double getPoint(FIFORequestChannel &chan, int person, double time, int ecg_no)
 int main(int argc, char *argv[])
 {
 	char *filename;
-	char *buffer_size;
+	char *buffer_size = "256";
+	__int64_t BUFFER_SIZE = MAX_MESSAGE;
 	bool sendPoint = false, sendPoints = false, sendFile = false, newChannel = false;
 	struct timeval start, end;
 	int opt, person, ecg_no;
@@ -56,6 +57,7 @@ int main(int argc, char *argv[])
 			break;
 		case 'm':
 			buffer_size = optarg;
+			BUFFER_SIZE = atoi(buffer_size);
 			break;
 		}
 	}
@@ -63,21 +65,21 @@ int main(int argc, char *argv[])
 	pid_t pid = fork();
 	if (pid == 0)
 	{
-		char *arglist[] = {"./server", NULL};
+		char *arglist[] = {"./server", "-m", buffer_size, NULL};
 		execvp(arglist[0], arglist);
 	}
 	else
 	{
 		FIFORequestChannel chan("control", FIFORequestChannel::CLIENT_SIDE);
 
-		int BUFFER_SIZE = atoi(buffer_size);
+		cout << "Client buffer size: " << BUFFER_SIZE << endl;
 		if (newChannel)
 		{
 			cout << "Second Channel Created..." << endl;
 			MESSAGE_TYPE msg = NEWCHANNEL_MSG;
 			chan.cwrite(&msg, sizeof(MESSAGE_TYPE));
-			char _name[MAX_MESSAGE];
-			chan.cread(&_name, MAX_MESSAGE);
+			char _name[BUFFER_SIZE];
+			chan.cread(&_name, BUFFER_SIZE);
 
 			FIFORequestChannel secondChan(_name, FIFORequestChannel::CLIENT_SIDE);
 			double result = getPoint(secondChan, 1, .004, 2);
@@ -125,6 +127,8 @@ int main(int argc, char *argv[])
 
 		if (sendFile)
 		{
+			gettimeofday(&start, NULL);
+
 			filemsg f(0, 0);
 			int size_total = sizeof(filemsg) + strlen(filename) + 1;
 			char *buf = new char[size_total];
@@ -137,7 +141,7 @@ int main(int argc, char *argv[])
 			chan.cread(&fileSize, sizeof(__int64_t));
 
 			// Creating the buffer
-			char rec_buf[MAX_MESSAGE];
+			char rec_buf[BUFFER_SIZE];
 
 			// Creating the output file
 			string path = "received/" + string(filename);
@@ -145,31 +149,35 @@ int main(int argc, char *argv[])
 
 			// Updating filemsg length
 			filemsg *fm = (filemsg *)buf;
-			fm->length = MAX_MESSAGE;
+			fm->length = BUFFER_SIZE;
 			// Writing to the file
 			__int64_t windowEnd;
-			for (windowEnd = MAX_MESSAGE; windowEnd <= fileSize; windowEnd += MAX_MESSAGE)
+			for (windowEnd = BUFFER_SIZE; windowEnd <= fileSize; windowEnd += BUFFER_SIZE)
 			{
-				fm->offset = windowEnd - MAX_MESSAGE;
+				fm->offset = windowEnd - BUFFER_SIZE;
 				chan.cwrite(buf, size_total);
-				chan.cread(rec_buf, MAX_MESSAGE);
-				fwrite(rec_buf, 1, MAX_MESSAGE, outputfile);
+				chan.cread(rec_buf, BUFFER_SIZE);
+				fwrite(rec_buf, 1, BUFFER_SIZE, outputfile);
 			}
 
-			int remaining = fileSize % MAX_MESSAGE;
-
-			cout << "File length: " << fileSize << endl;
-			cout << "Remaining: " << remaining << endl;
+			int remaining = fileSize % BUFFER_SIZE;
 
 			if (remaining > 0)
 			{
-				fm->offset = windowEnd - MAX_MESSAGE;
+				fm->offset = windowEnd - BUFFER_SIZE;
 				fm->length = remaining;
 
 				chan.cwrite(buf, size_total);
 				chan.cread(rec_buf, remaining);
 				fwrite(rec_buf, 1, remaining, outputfile);
 			}
+
+			gettimeofday(&end, NULL);
+
+			double time_taken = (end.tv_sec - start.tv_sec) * 1e6;
+			time_taken = (time_taken + (end.tv_usec - start.tv_usec)) * 1e-6;
+			cout << "Time taken by the program is: " << fixed << time_taken << setprecision(6);
+			cout << " sec" << endl;
 		}
 
 		MESSAGE_TYPE m = QUIT_MSG;
